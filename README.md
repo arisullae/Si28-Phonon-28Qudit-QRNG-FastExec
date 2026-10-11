@@ -23,18 +23,6 @@
 
 ---
 
-```python
-import urllib.request
-import shutil
-import os
-
-# 깃허브 원본 시드 다운로드 및 개인 저장소 백업 예시
-github_raw_url = "[https://raw.githubusercontent.com/arisullae/Si28-Phonon-28Qudit-QRNG-FastExec/main/data/verified_si28_bits.npy](https://raw.githubusercontent.com/arisullae/Si28-Phonon-28Qudit-QRNG-FastExec/main/data/verified_si28_bits.npy)"
-local_path = "/content/verified_si28_bits.npy"
-urllib.request.urlretrieve(github_raw_url, local_path)
-
----
-
 ## 💡 초보자를 위한 1분 쉬운 설명 (AI Studio & LLM 연동 가이드)
 
 ### 1. 난수(Seed, 시드)란 무엇인가요?

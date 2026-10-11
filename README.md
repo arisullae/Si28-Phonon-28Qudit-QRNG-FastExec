@@ -77,5 +77,5 @@ print("✅ [OK] Si-28 실물 물리 난수 시드 다운로드 완료!")
 ```
 ---
 
-* **📜 License**
+## **📜 License**
 * This project is released under the MIT License. See the LICENSE file for details.

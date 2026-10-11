@@ -74,7 +74,7 @@ github_raw_url = "[https://raw.githubusercontent.com/arisullae/Si28-Phonon-28Qud
 local_path = "/content/verified_si28_bits.npy"
 urllib.request.urlretrieve(github_raw_url, local_path)
 print("✅ [OK] Si-28 실물 물리 난수 시드 다운로드 완료!")
-
+```
 ---
 
 * **📜 License**

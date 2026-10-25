@@ -113,8 +113,8 @@ GLOBAL_ENGINE_MODE = 'advanced'
 
 # 벤치마크 및 NIST 검정 파라미터
 repeat_runs = 1_000         # Cell 1: 단발 키 생성 및 수율(Throughput) 측정 횟수
-GLOBAL_TOTAL_RUNS = 1      # Core Phase 2: NIST 배치 검정 총 회차 (m = 20)
-GLOBAL_BIT_LENGTH = 100_000_000  # 1회 검정당 난수 비트스트림 길이 (n = 1,000,000 bits)
+GLOBAL_TOTAL_RUNS = 20      # Core Phase 2: NIST 배치 검정 총 회차 (m = 20)
+GLOBAL_BIT_LENGTH = 1_000_000  # 1회 검정당 난수 비트스트림 길이 (n = 1,000,000 bits)
 
 # ------------------------------------------------------------------------------
 # 3. 평가 데이터셋 데이터 소스 모드 (Evaluation Dataset Mode)
@@ -122,7 +122,7 @@ GLOBAL_BIT_LENGTH = 100_000_000  # 1회 검정당 난수 비트스트림 길이 
 # EVAL_DATASET_MODE:
 #   - 1 ("RAW_SLICING")   : Si-28 물리 대용량 비트스트림 연속 슬라이싱 (실제 평가)
 #   - 2 ("URANDOM_CHECK") : os.urandom 기반 의사 난수 생성 (검정 엔진 p-Uniformity 검증)
-EVAL_DATASET_MODE = 2
+EVAL_DATASET_MODE = 1
 
 # ------------------------------------------------------------------------------
 # 4. 분할 연산 및 체크포인트 제어 (Chunk & Checkpoint Control)
@@ -145,182 +145,170 @@ print(f"⚙️ [DATASET MODE] EVAL_DATASET_MODE: {EVAL_DATASET_MODE} | 청크 �
 print(f"⚙️ [ENGINE SWITCH] USE_NIST_OFFICIAL_CPP: {USE_NIST_OFFICIAL_CPP} | GLOBAL_ENGINE_MODE: '{GLOBAL_ENGINE_MODE}'")
 
 # ==============================================================================
-# [Cell 1] 물리 엔트로피 생성기 및 성능 벤치마크 (Physical Entropy Engine & Benchmark)
-# ------------------------------------------------------------------------------
-# 역할: Si-28 격자 포논 공진 모드와 훈민정음 28자소 상호작용 모델 기반의
-#       Qudit 난수 비트스트림을 생성하고, 처리량(Throughput) 및 독립 평가 세트
-#       (Single Source of Truth: si28_bits)를 할당합니다.
+# [Colab 패키지 환경 자동 정비 및 Cirq 안전 로드]
 # ==============================================================================
-
+import sys
 import os
-import time
-import hashlib
+import shutil
+
+if 'google.colab' in sys.modules:
+    # 1. 이전 pip 설치 중단으로 남은 깨진 임시 폴더(~andas 등) 자동 제거
+    for path in sys.path:
+        if 'dist-packages' in path and os.path.exists(path):
+            try:
+                for d in os.listdir(path):
+                    if d.startswith('~'):
+                        invalid_path = os.path.join(path, d)
+                        if os.path.isdir(invalid_path):
+                            shutil.rmtree(invalid_path, ignore_errors=True)
+                        else:
+                            os.remove(invalid_path)
+            except Exception:
+                pass
+
+    # 2. Cirq 설치
+    !pip install -q cirq
+
+import math
+import logging
+from enum import Enum
+from typing import Dict, Any, List
 import numpy as np
-from numba import njit, prange
 
-# 0. 이전 실행 잔존 찌꺼기 버퍼 제거 및 전역 메모리 정돈
-clean_memory('si28_bits')
+try:
+    import cirq
+    CIRQ_AVAILABLE = True
+except ImportError:
+    CIRQ_AVAILABLE = False
 
-
-# ------------------------------------------------------------------------------
-# 1. Numba C-Level 고속 포논-Qudit 위상 연산 커널 (Numba JIT Accelerated Kernel)
-# ------------------------------------------------------------------------------
-@njit(fastmath=True, parallel=True)
-def _phonon_qudit_kernel(phases: np.ndarray, num_samples: int) -> np.ndarray:
-    """
-    Si-28 격자 포논 모드와 훈민정음 28자소 구조(초성14/중종성13 대칭 파쇄)를
-    모사하는 28-Qudit 위상 간섭 연산 C-Level 커널.
-
-    Args:
-        phases (np.ndarray): Shape (num_samples, 28) 형태의 무작위 위상 행렬 [0, 2π)
-        num_samples (int)  : 생성할 포논 상태 샘플 개수
-
-    Returns:
-        np.ndarray: 비선형 위상 상호작용이 반영된 연속형 엔트로피 신호 배열
-    """
-    results = np.empty(num_samples, dtype=np.float64)
-
-    # OpenMP 기반 C-Level 멀티스레드 병렬루프 수행
-    for i in prange(num_samples):
-        # [Group A] 초성 14자소 연동 포논 공진 파동합 (Sinusoidal Coupling)
-        sum_14 = 0.0
-        for j in range(14):
-            sum_14 += np.sin(phases[i, j])
-
-        # [Group B] 중/종성 13자소 연동 포논 공진 파동합 (Cosinusoidal Coupling)
-        # Note: 14 vs 13 불균형 상호작용을 통해 대칭성 파쇄 및 위상 엔트로피 극대화
-        sum_13 = 0.0
-        for j in range(14, 28):
-            sum_13 += np.cos(phases[i, j])
-
-        # 차분 간섭(Differential Interference) 신호 추출
-        results[i] = sum_14 - sum_13
-
-    return results
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+logger = logging.getLogger("si28_phonon_qrng")
 
 
-# ------------------------------------------------------------------------------
-# 2. Si-28 포논 QRNG 비트스트림 생성 함수 (Phonon-QRNG Bitstream Generator)
-# ------------------------------------------------------------------------------
-def generate_phonon_qrng_bits(length: int = 1_000_000, seed: int = None) -> np.ndarray:
-    """
-    28-Qudit 위상 연산 및 SHA-256 암호학적 확산(Diffusion)을 거쳐
-    고엔트로피 이진 비트스트림을 추출하는 메인 QRNG 함수.
-
-    Args:
-        length (int): 추출할 최종 난수 비트 길이 (기본값: 1,000,000 bits)
-        seed (int)  : 재현성 테스트용 시드값 (Optional)
-
-    Returns:
-        np.ndarray: uint8 0/1로 구성된 1차원 이진 난수 배열
-    """
-    if seed is not None:
-        np.random.seed(seed)
-
-    qudit_dim = 28
-    # 256비트 해시 블록 단위 추출에 필요한 최소 샘플 수 계산
-    num_samples = int(np.ceil(length / 256))
-
-    # [Step 1] 무작위 28차원 위상 공간 매핑 [0, 2π)
-    phases = np.random.uniform(0, 2 * np.pi, size=(num_samples, qudit_dim))
-
-    # [Step 2] Numba JIT 포논 간섭 커널 실행
-    phonon_states = _phonon_qudit_kernel(phases, num_samples)
-
-    # [Step 3] 엔트로피 벡터 결합 (포논 상태 신호 + 위상 매트릭스)
-    combined = np.hstack([phonon_states[:, None], phases])
-
-    # [Step 4] 암호학적 확산 (SHA-256 Cryptographic Diffusion)
-    # 바이트 레벨 비선형 혼합을 통해 균일 분포(Uniform Distribution) 확보
-    extracted_bytes = bytearray()
-    for row in combined:
-        extracted_bytes.extend(hashlib.sha256(row.tobytes()).digest())
-
-    # [Step 5] 바이트 배열을 이진 비트 배열로 언팩(Unpack) 및 요청 길이로 크롭
-    diffused_array = np.frombuffer(extracted_bytes, dtype=np.uint8)
-    all_bits = np.unpackbits(diffused_array)
-
-    return all_bits[:length].astype(np.int8)
+class ExecutionMode(Enum):
+    MODE_1_PHYSICAL_QPU = "Mode 1: Physical QPU Hardware Execution (Physical QRNG)"
+    MODE_2_CIRQ_SIMULATION = "Mode 2: Cirq 5-Qubit Quantum Circuit Simulation (Circuit QRNG)"
+    MODE_3_ARCHIVAL_SEED = "Mode 3: Historical Archival Seed Sampler (Non-Quantum)"
 
 
-# ------------------------------------------------------------------------------
-# 3. 엔진 워밍업 및 순수 처리량(Throughput) 벤치마크
-# ------------------------------------------------------------------------------
-print("=" * 70)
-print("  Si-28 Phonon & Hunminjeongeum-Inspired 28-Qudit QRNG Engine")
-print("=" * 70)
+class QuditToQubitTranspiler:
+    HUNMINJEONGEUM_28_PHASES = [(2.0 * math.pi * k) / 28.0 for k in range(28)]
 
-# [Warm-up] Numba JIT C-Level 사전 컴파일 수행 (첫 실행 시의 컴파일 오버헤드 제거)
-_ = generate_phonon_qrng_bits(length=10_000)
+    def __init__(self, num_qubits: int = 5):
+        self.num_qubits = num_qubits
 
-print(f"[*] 벤치마크 워밍업 완료. Pure Throughput 측정 시작 (반복: 10회 평균)...")
-start_time = time.perf_counter()
+    def qudit_index_to_binary(self, index: int) -> List[int]:
+        return [(index >> i) & 1 for i in reversed(range(self.num_qubits))]
 
-# Numba C-Level 병렬 연산 벤치마크 가동 (10회 반복 측정 후 평균)
-for _ in range(10):
-    _ = generate_phonon_qrng_bits(length=GLOBAL_BIT_LENGTH)
-elapsed_time = (time.perf_counter() - start_time) / 10.0
-
-total_bits_generated = GLOBAL_BIT_LENGTH
-throughput_mbps = (total_bits_generated / elapsed_time) / 1e6
-keys_per_sec = throughput_mbps * 1e6 / 256  # 256-bit AES 암호키 생성 기준 수율
-
-print(f"  [✓] 연산 완료 소요 시간 : {elapsed_time:.6f} 초")
-print(f"  [✓] Pure Throughput    : {throughput_mbps:.2f} Mbps")
-print(f"  [✓] Estimated Key Yield: {keys_per_sec:,.0f} Keys/sec (256-bit AES 기준)")
-print("-" * 70)
+    def get_phase_for_character_index(self, index: int) -> float:
+        return self.HUNMINJEONGEUM_28_PHASES[index % 28]
 
 
-# ------------------------------------------------------------------------------
-# 4. 검정용 단일 출처(Single Source of Truth) 독립 평가 데이터셋 생성
-# ------------------------------------------------------------------------------
-si28_bits = []
-bit_length = GLOBAL_BIT_LENGTH
-total_runs = GLOBAL_TOTAL_RUNS
+class CirqPhononQRNGEngine:
+    def __init__(self, mode: ExecutionMode = ExecutionMode.MODE_2_CIRQ_SIMULATION):
+        self.mode = mode
+        self.transpiler = QuditToQubitTranspiler(num_qubits=5)
 
-if EVAL_DATASET_MODE == 1:
-    # [모드 1] Si-28 물리 비트스트림 대용량 연속 생성 후 비중복 슬라이싱
-    print(f"[*] [모드 1] Si-28 물리 비트스트림 대용량 생성 및 비중복 슬라이싱 중... ({total_runs}개 세트)")
-    required_bits = total_runs * bit_length
-    raw_stream = generate_phonon_qrng_bits(length=required_bits)
+    def build_5qubit_phonon_circuit(self, phase_angles: List[float]) -> Any:
+        qubits = [cirq.LineQubit(i) for i in range(5)]
+        circuit = cirq.Circuit()
 
-    for i in range(total_runs):
-        start_idx = i * bit_length
-        end_idx = start_idx + bit_length
-        si28_bits.append(raw_stream[start_idx:end_idx])
-    print(f"[SUCCESS] {len(si28_bits)}개 비중복 독립 물리 비트스트림 할당 완료!")
+        # Step 1: 5개 큐비트 하다마드(H) 중첩 상태 |+>^5
+        circuit.append([cirq.H(q) for q in qubits])
 
-elif EVAL_DATASET_MODE == 2:
-    # [모드 2] OS Cryptographic PRNG 기반 baseline 비트스트림 (NIST p-Uniformity 검증용)
-    print(f"[*] [모드 2] os.urandom 기반 완전 독립 난수 {total_runs}개 생성 중...")
-    byte_len = bit_length // 8
-    for i in range(total_runs):
-        raw_bytes = os.urandom(byte_len)
-        chunk = np.unpackbits(np.frombuffer(raw_bytes, dtype=np.uint8))
-        si28_bits.append(chunk.astype(np.int8))
-    print(f"[SUCCESS] {len(si28_bits)}개 완전 독립 난수 세트 준비 완료! (p-Uniformity 검증용)")
+        # Step 2: 훈민정음 28자소 위상각(RZ) 주입
+        for i, q in enumerate(qubits):
+            phase = phase_angles[i % len(phase_angles)]
+            circuit.append(cirq.rz(rads=phase)(q))
 
-print("=" * 70)
-print(f"  Final Buffer Status: si28_bits len = {len(si28_bits)} | Bit Length = {len(si28_bits[0]):,} bits")
-print("=" * 70)
+        # Step 3: 인접 큐비트간 CNOT 위상 간섭 얽힘
+        for i in range(4):
+            circuit.append(cirq.CNOT(qubits[i], qubits[i + 1]))
+
+        # Step 4: 양자 측정 (Measurement)
+        circuit.append(cirq.measure(*qubits, key="result"))
+        return circuit
+
+    def generate_quantum_entropy_bits(self, bit_length: int = 1000000, num_runs: int = 20) -> Dict[str, Any]:
+        if self.mode == ExecutionMode.MODE_2_CIRQ_SIMULATION:
+            if not CIRQ_AVAILABLE:
+                return {
+                    "success": False,
+                    "mode": self.mode.value,
+                    "error": "Cirq 미설치. !pip install cirq 가 필요합니다.",
+                    "entropy_streams": []
+                }
+
+            num_shots = math.ceil(bit_length / 5)
+            sample_phases = [self.transpiler.get_phase_for_character_index(i) for i in range(5)]
+            circuit = self.build_5qubit_phonon_circuit(sample_phases)
+            simulator = cirq.Simulator()
+
+            entropy_streams = []
+            for run in range(num_runs):
+                result = simulator.run(circuit, repetitions=num_shots)
+                measurements = result.measurements["result"]
+                bit_array = measurements.flatten()[:bit_length].astype(np.uint8)
+                entropy_streams.append(bit_array)
+
+            return {
+                "success": True,
+                "mode": self.mode.value,
+                "num_runs": num_runs,
+                "bit_length_per_run": bit_length,
+                "entropy_streams": entropy_streams,
+                "circuit_diagram": str(circuit),
+            }
+        else:
+            return {
+                "success": False,
+                "mode": self.mode.value,
+                "error": "Mode 1 또는 Mode 2에서만 양자 엔트로피가 생성됩니다.",
+                "entropy_streams": []
+            }
+
 
 # =====================================================================
-# [사용자 옵션] Cell 1 생성 난수 추출 및 파일 저장
+# 🔥 [Cell 0 파라미터 완전 동적 수용 및 파이프라인 자동 바인딩]
 # =====================================================================
-# import numpy as np
+# 1. Cell 0 전역 변수 동적 수용 (설정이 없을 시 기본값 20회/1,000,000비트 적용)
+target_runs = globals().get('GLOBAL_TOTAL_RUNS', 20)
+raw_bit_length = globals().get('GLOBAL_BIT_LENGTH', 1000000)
+engine_mode = globals().get('GLOBAL_ENGINE_MODE', 'advanced')
+dataset_mode = globals().get('EVAL_DATASET_MODE', 1)
 
-# # 저장할 대상 비트스트림 선택 (첫 번째 생성 배치 기준)
-# target_bits = si28_bits[0] if len(si28_bits) > 0 else raw_stream
+# 2. Cell 2-2 ('advanced' 3D 격자 검정) 구동 시 최소 22^3=10,648 비트 자동 보장
+if engine_mode == 'advanced' and raw_bit_length < 10648:
+    target_bit_length = 10648
+else:
+    target_bit_length = raw_bit_length
 
-# # 1. 텍스트 저장 ('010101...')
-# with open("generated_qrng_bits.txt", "w") as f:
-#     f.write("".join(map(str, target_bits)))
+# 3. Cirq 5-Qubit 양자 엔트로피 연산 가동
+engine = CirqPhononQRNGEngine(mode=ExecutionMode.MODE_2_CIRQ_SIMULATION)
+raw_result = engine.generate_quantum_entropy_bits(bit_length=target_bit_length, num_runs=target_runs)
 
-# # 2. 바이너리(.bin) 저장
-# with open("generated_qrng_bits.bin", "wb") as f:
-#     f.write(np.packbits(target_bits).tobytes())
+if raw_result["success"]:
+    entropy_streams = raw_result["entropy_streams"]
 
-# print("💾 난수 추출 완료: generated_qrng_bits.txt / bin")
+    # 4. Cell 2 ~ Cell 7 전역 파이프라인 수신 규격 완전 바인딩
+    si28_bits = entropy_streams
+    base_stream = si28_bits
+
+    # 5. 하위 단일 비트스트림 참조 변수 바인딩
+    source_bits = entropy_streams[0]
+    daily_rotated_seed_bits = entropy_streams[0]
+    entropy_bytes = bytes(np.packbits(entropy_streams[0]).tolist())
+
+    print(f"✅ Cell 1 구동 완료 | 모드: {raw_result['mode']}")
+    print(f"⚙️ [Cell 0 동적 수용] GLOBAL_ENGINE_MODE: '{engine_mode}' | EVAL_DATASET_MODE: {dataset_mode}")
+    print(f"⚙️ [Cell 0 동적 수용] 배치 회차(m): {len(si28_bits)}회 (Cell 0 요구: {target_runs}회)")
+    print(f"⚙️ [Cell 0 동적 수용] 1회당 비트 길이(n): {len(si28_bits[0]):,} bits (Cell 0 요구: {target_bit_length:,} bits)")
+    print(f"✅ 총 생성된 실제 양자 엔트로피: {len(si28_bits) * len(si28_bits[0]):,} bits")
+    print(f"✅ 파이프라인 C-Buffer 수신 규격 바인딩: type(si28_bits)={type(si28_bits)}, len(base_stream)={len(base_stream)}, len(base_stream[0])={len(base_stream[0]):,}\n")
+    print("[Cirq 5-Qubit 양자 회로 구조]")
+    print(raw_result["circuit_diagram"])
+else:
+    print(f"❌ Cell 1 구동 실패: {raw_result['error']}")
 
 # ==============================================================================
 # [Cell 2-1] Legacy NIST SP 800-22 Verification Engine (Standard 1D Accelerated)

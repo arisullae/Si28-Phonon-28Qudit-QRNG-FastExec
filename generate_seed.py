@@ -39,22 +39,17 @@ def generate_and_save_si28_seed(bit_length: int = 1000000, num_runs: int = 1):
     output_path = os.path.join(output_dir, "verified_si28_bits.npy")
     np.save(output_path, raw_bits)
 
-    # 5. [신규 추가] qrng-dqi-optimizer 저장소로 양자 시드 자동 전달 (권한 에러 완전 방지)
+    # 5. [수정된 부분] GitHub Actions 가상 서버용 안전한 양자 시드 전달 (권한 에러 방지)
     import shutil
-    target_paths = [
-        "../data",                                # GitHub Actions 환경 (상위 qrng-dqi-optimizer/data)
-        "/content/qrng-dqi-optimizer/data",       # Colab 환경
-        "../qrng-dqi-optimizer/data"              # 로컬 가상 환경
-    ]
-    for target in target_paths:
+    target_dirs = ["../data", "../qrng-dqi-optimizer/data"]
+    for t in target_dirs:
         try:
-            # 상위 폴더가 실제로 존재하는 경우에만 안전하게 복사
-            if os.path.exists(os.path.dirname(target)):
-                os.makedirs(target, exist_ok=True)
-                shutil.copy(output_path, os.path.join(target, "verified_si28_bits.npy"))
-                print(f"    * 자동 전달 완료 -> {target}")
+            if os.path.exists(os.path.dirname(t)):
+                os.makedirs(t, exist_ok=True)
+                shutil.copy(output_path, os.path.join(t, "verified_si28_bits.npy"))
+                print(f"    * 양자 시드 전달 완료 -> {t}")
         except Exception:
-            pass  # 권한이 없거나 폴더가 없어도 팅기지 않고 안전하게 넘어가도록 보호
+            pass
 
     print(f" [+] 진성 양자 시드 발행 완료 및 파일 저장 성공")
     print(f"     * 저장 경로 : {output_path}")

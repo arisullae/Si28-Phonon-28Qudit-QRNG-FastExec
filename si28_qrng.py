@@ -167,7 +167,7 @@ if 'google.colab' in sys.modules:
                 pass
 
     # 2. Cirq 설치
-    !pip install -q cirq
+   # !pip install -q cirq
 
 import math
 import logging

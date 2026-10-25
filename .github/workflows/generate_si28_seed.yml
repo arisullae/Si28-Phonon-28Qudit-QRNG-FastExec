@@ -33,6 +33,13 @@ jobs:
         run: |
           git config --global user.name "Si28-QRNG-Bot"
           git config --global user.email "actions@github.com"
-          git add data/verified_si28_bits.npy
-          git commit -m "chore(qrng): auto-generate and publish verified Si-28 physical seed [skip ci]" || echo "No changes to commit"
-          git push
+
+          # .npy 시드 파일과 README.md를 함께 커밋 대상으로 지정
+          git add data/verified_si28_bits.npy README.md
+          
+          if git status --porcelain | grep -E 'data/|README.md'; then
+            git commit -m "🤖 [Auto-CI] Daily Quantum Entropy Seed & README Sample Updated [skip ci]"
+            git push
+          else
+            echo "No changes detected in seed or README."
+          fi

@@ -2470,3 +2470,66 @@ print(f"[+] JSON 내보내기 완료 경로  : {json_file_path}")
 print("\n" + "=" * 70)
 print("    Si-28 QRNG & HUNMINJEONGEUM QUDIT FRAMEWORK PIPELINE COMPLETE")
 print("=" * 70)
+
+# [노트북 최하단 연동 셀] 진짜 양자 시드 전달 및 DQI 벤치마크 실행
+
+import os
+import subprocess
+
+# 1. Cell 1이 생성한 진짜 양자 시드 파일 탐색
+possible_seeds = [
+    '/content/data/verified_si28_bits.npy',
+    '/content/verified_si28_bits.npy',
+    'data/verified_si28_bits.npy',
+    'verified_si28_bits.npy'
+]
+
+real_seed_path = None
+for p in possible_seeds:
+    if os.path.exists(p):
+        real_seed_path = p
+        break
+
+if real_seed_path:
+    print(f"✅ 진짜 양자 시드 발견: {real_seed_path}")
+
+    target_dir = '/content/qrng-dqi-optimizer'
+    repo_url = "https://github.com/arisullae/qrng-dqi-optimizer"
+
+    # 2. benchmarks 폴더가 없는 불완전한 기존 디렉터리가 있다면 정단 후 재다운로드
+    if os.path.exists(target_dir) and not os.path.exists(os.path.join(target_dir, 'benchmarks')):
+        print("🧹 불완전하게 생성된 폴더를 정리합니다...")
+        subprocess.run(["rm", "-rf", target_dir])
+
+    if not os.path.exists(target_dir):
+        print("📥 qrng-dqi-optimizer 저장소를 다운로드합니다...")
+        clone_res = subprocess.run(["git", "clone", repo_url, target_dir], capture_output=True, text=True)
+        if clone_res.returncode == 0:
+            print("✅ 저장소 다운로드 성공!")
+        else:
+            print("❌ 다운로드 실패:", clone_res.stderr)
+    else:
+        print("✅ qrng-dqi-optimizer 저장소가 정상 존재합니다.")
+
+    # 3. data/ 폴더 생성 및 양자 시드 복사
+    os.makedirs(f"{target_dir}/data", exist_ok=True)
+    subprocess.run(["cp", real_seed_path, f"{target_dir}/data/verified_si28_bits.npy"])
+    print("✅ qrng-dqi-optimizer/data/ 로 진짜 양자 시드 전달 완료!")
+
+    # 4. PYTHONPATH 주입 후 benchmarks 평가 가동
+    print("\n⚛️ DQI 회로 최적화 벤치마크 평가 리포트:")
+    env = os.environ.copy()
+    src_dir = os.path.join(target_dir, 'src')
+    env["PYTHONPATH"] = f"{target_dir}:{src_dir}:" + env.get("PYTHONPATH", "")
+
+    eval_result = subprocess.run(
+        ["python3", "-m", "benchmarks.metrics_evaluator"],
+        cwd=target_dir,
+        env=env,
+        capture_output=True,
+        text=True
+    )
+    print(eval_result.stdout if eval_result.stdout else eval_result.stderr)
+
+else:
+    print("⚠️ 양자 시드 파일이 발견되지 않았습니다. Cell 1을 먼저 실행해 주세요.")

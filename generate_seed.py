@@ -1,11 +1,12 @@
 """
 Silicon-28 Phonon Dynamics & Hunminjeongeum 28-Qudit Topological QRNG
-Quantum Seed Generator Module (generate_seed.py - Daily Lightweight Mode)
+Quantum Seed Generator Module (generate_seed.py - Dropdown & 100-bit Align)
 """
 import os
 import sys
 import re
 import shutil
+import datetime
 import numpy as np
 
 # si28_qrng 엔진 클래스 명칭 자동 호환 임포트 (CirqPhononQRNGEngine / PhononQRNG)
@@ -21,18 +22,31 @@ except ImportError:
         sys.exit(1)
 
 def update_readme_sample_bits(raw_bits, readme_path="README.md", sample_size=1000):
-    """README.md 내의 1,000개 예시 난수 텍스트만 최신 양자 비트로 경량 자동 교체"""
+    """README.md 내 <details> 드롭다운 영역에 100개씩 10줄(총 1,000비트) 정렬하여 안전 교체"""
     if not os.path.exists(readme_path):
+        print(f"⚠️ [Warning] {readme_path} 파일이 존재하지 않습니다.")
         return
 
     try:
-        sample_bits = raw_bits[:sample_size].tolist()
+        # 1. 상위 1,000비트를 추출하여 한 줄에 100개씩 총 10줄로 포맷팅
+        bits_str = "".join(map(str, raw_bits[:sample_size]))
+        lines = [bits_str[i : i + 100] for i in range(0, sample_size, 100)]
+        formatted_bits_text = "\n".join(lines)
+
+        # 2. 오늘 날짜의 연도 기준 일수(Day of Year) 계산
+        day_of_year = datetime.datetime.now().timetuple().tm_yday
+
+        # 3. 스크린샷과 동일한 <details> 드롭다운 HTML 및 100비트 정렬 텍스트 생성
         formatted_sample = (
             f"<!-- QUANTUM_SEED_START -->\n"
-            f"```python\n"
-            f"# Daily Verified Si28 Quantum Entropy Sample (First 1,000 bits)\n"
-            f"SI28_QUANTUM_SEED_SAMPLE = {sample_bits}\n"
+            f"<details>\n"
+            f"<summary><b>👉 [클릭하여 오늘(Day #{day_of_year}) 자동으로 회전된 1,000비트 난수 예시 보기]</b></summary>\n\n"
+            f"> **[실시간 물리 난수 비트스트림 (1,000 bits - 100비트 단위 정렬)]**\n"
+            f"> 마우스로 드래그하여 복사한 뒤 AI Studio 질문창에 활용하세요!\n"
+            f"```text\n"
+            f"{formatted_bits_text}\n"
             f"```\n"
+            f"</details>\n"
             f"<!-- QUANTUM_SEED_END -->"
         )
 
@@ -40,22 +54,22 @@ def update_readme_sample_bits(raw_bits, readme_path="README.md", sample_size=100
             content = f.read()
 
         pattern = r"<!-- QUANTUM_SEED_START -->.*?<!-- QUANTUM_SEED_END -->"
+        
+        # 태그가 정확히 마킹되어 있는 경우에만 안전하게 교체 (미발견 시 원본 파일 보존)
         if re.search(pattern, content, flags=re.DOTALL):
             new_content = re.sub(pattern, formatted_sample, content, flags=re.DOTALL)
+            with open(readme_path, "w", encoding="utf-8") as f:
+                f.write(new_content)
+            print("📝 [Sync] README.md 1,000비트 드롭다운 샘플(100비트/줄) 업데이트 완료.")
         else:
-            new_content = content + f"\n\n## ⚛️ Daily Quantum Seed Sample (1,000 Bits)\n{formatted_sample}\n"
-
-        with open(readme_path, "w", encoding="utf-8") as f:
-            f.write(new_content)
-        print("📝 [Sync] README.md 1,000-bit sample updated successfully.")
+            print("⚠️ [Warning] README.md 내 <!-- QUANTUM_SEED_START --> 태그를 찾을 수 없어 안전하게 업데이트를 스킵했습니다.")
     except Exception as err:
         print(f"⚠️ [Warning] README update skipped: {err}")
 
 def generate_and_save_si28_seed(bit_length: int = 1_000_000, num_runs: int = 1):
-    # [경량화] NIST SP 800-22 검증 표 및 Cell 10 매니페스토 출력 없이 요약 로그만 표출
     print("🚀 [Si28-QRNG Engine] Mode 2 Daily Seed Generation Initialized...")
 
-    # 1. Cell 1 수준의 순수 양자 엔트로피 비트스트림만 추출
+    # 1. Cell 1 수준의 순수 양자 엔트로피 비트스트림 추출
     try:
         if ENGINE_TYPE == "CIRQ":
             engine = CirqPhononQRNGEngine(mode=ExecutionMode.MODE_2_CIRQ_SIMULATION)
@@ -80,7 +94,7 @@ def generate_and_save_si28_seed(bit_length: int = 1_000_000, num_runs: int = 1):
     np.save(output_path, raw_bits)
     print(f"📦 Archived Seed File: {output_path}")
 
-    # 3. README.md 상의 샘플 1,000비트 동적 업데이트
+    # 3. README.md 상의 드롭다운 샘플 1,000비트 동적 안전 업데이트
     update_readme_sample_bits(raw_bits, readme_path="README.md", sample_size=1000)
 
     # 4. 상대 경로를 통한 qrng-dqi-optimizer 및 상위 data/ 폴더 전달

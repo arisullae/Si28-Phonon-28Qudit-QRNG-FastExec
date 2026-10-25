@@ -1,6 +1,6 @@
 """
 Silicon-28 Phonon Dynamics & Hunminjeongeum 28-Qudit Topological QRNG
-Quantum Seed Generator Module (generate_seed.py - Lightweight Sync Mode)
+Quantum Seed Generator Module (generate_seed.py - Daily Lightweight Mode)
 """
 import os
 import sys
@@ -8,21 +8,33 @@ import re
 import shutil
 import numpy as np
 
-# si28_qrng 엔진 클래스 및 실행 모드 정확한 명칭 임포트
+# si28_qrng 엔진 클래스 명칭 자동 호환 임포트 (CirqPhononQRNGEngine / PhononQRNG)
 try:
     from si28_qrng import CirqPhononQRNGEngine, ExecutionMode
-except ImportError as e:
-    print(f"❌ [Error] si28_qrng import failed: {e}")
-    sys.exit(1)
+    ENGINE_TYPE = "CIRQ"
+except ImportError:
+    try:
+        from si28_qrng import PhononQRNG
+        ENGINE_TYPE = "PHONON"
+    except ImportError as e:
+        print(f"❌ [Error] si28_qrng import failed: {e}")
+        sys.exit(1)
 
 def update_readme_sample_bits(raw_bits, readme_path="README.md", sample_size=1000):
-    """README.md 내의 1,000개 예시 난수 텍스트를 최신 양자 비트로 경량 자동 교체"""
+    """README.md 내의 1,000개 예시 난수 텍스트만 최신 양자 비트로 경량 자동 교체"""
     if not os.path.exists(readme_path):
         return
 
     try:
         sample_bits = raw_bits[:sample_size].tolist()
-        formatted_sample = f"<!-- QUANTUM_SEED_START -->\n```python\n# Daily Verified Si28 Quantum Entropy Sample (First 1,000 bits)\nSI28_QUANTUM_SEED_SAMPLE = {sample_bits}\n```\n<!-- QUANTUM_SEED_END -->"
+        formatted_sample = (
+            f"<!-- QUANTUM_SEED_START -->\n"
+            f"```python\n"
+            f"# Daily Verified Si28 Quantum Entropy Sample (First 1,000 bits)\n"
+            f"SI28_QUANTUM_SEED_SAMPLE = {sample_bits}\n"
+            f"```\n"
+            f"<!-- QUANTUM_SEED_END -->"
+        )
 
         with open(readme_path, "r", encoding="utf-8") as f:
             content = f.read()
@@ -40,31 +52,38 @@ def update_readme_sample_bits(raw_bits, readme_path="README.md", sample_size=100
         print(f"⚠️ [Warning] README update skipped: {err}")
 
 def generate_and_save_si28_seed(bit_length: int = 1_000_000, num_runs: int = 1):
-    print("🚀 [Si28-QRNG Engine] Mode 2 Quantum Seed Generation & Sync Initialized...")
+    # [경량화] NIST SP 800-22 검증 표 및 Cell 10 매니페스토 출력 없이 요약 로그만 표출
+    print("🚀 [Si28-QRNG Engine] Mode 2 Daily Seed Generation Initialized...")
 
-    # 1. Cirq 5-Qubit 양자 엔트로피 엔진 가동 (Mode 2)
-    engine = CirqPhononQRNGEngine(mode=ExecutionMode.MODE_2_CIRQ_SIMULATION)
-    result = engine.generate_quantum_entropy_bits(bit_length=bit_length, num_runs=num_runs)
-
-    if not result.get("success", False):
-        print(f"❌ [Error] Quantum entropy generation failed: {result.get('error')}")
+    # 1. Cell 1 수준의 순수 양자 엔트로피 비트스트림만 추출
+    try:
+        if ENGINE_TYPE == "CIRQ":
+            engine = CirqPhononQRNGEngine(mode=ExecutionMode.MODE_2_CIRQ_SIMULATION)
+            result = engine.generate_quantum_entropy_bits(bit_length=bit_length, num_runs=num_runs)
+            if not result.get("success", False):
+                print(f"❌ [Error] Quantum entropy generation failed: {result.get('error')}")
+                sys.exit(1)
+            raw_bits = np.concatenate(result["entropy_streams"])
+        else:
+            qrng = PhononQRNG()
+            raw_bits = qrng.generate_bits(length=bit_length)
+    except Exception as err:
+        print(f"❌ [Error] Seed generation execution failed: {err}")
         sys.exit(1)
 
-    # 2. 비트스트림 추출 및 결합
-    raw_bits = np.concatenate(result["entropy_streams"])
     print(f"✅ Generated Real Quantum Entropy: {len(raw_bits):,} bits")
 
-    # 3. 로컬 data/ 폴더에 verified_si28_bits.npy 저장
+    # 2. 로컬 data/ 폴더에 verified_si28_bits.npy 저장
     output_dir = "data"
     os.makedirs(output_dir, exist_ok=True)
     output_path = os.path.join(output_dir, "verified_si28_bits.npy")
     np.save(output_path, raw_bits)
     print(f"📦 Archived Seed File: {output_path}")
 
-    # 4. README.md 상의 샘플 1,000비트 동적 업데이트
+    # 3. README.md 상의 샘플 1,000비트 동적 업데이트
     update_readme_sample_bits(raw_bits, readme_path="README.md", sample_size=1000)
 
-    # 5. 상대 경로를 통한 qrng-dqi-optimizer 전달 (경량 복사)
+    # 4. 상대 경로를 통한 qrng-dqi-optimizer 및 상위 data/ 폴더 전달
     target_dirs = ["../data", "../qrng-dqi-optimizer/data"]
     transferred_count = 0
     for target in target_dirs:
@@ -72,7 +91,7 @@ def generate_and_save_si28_seed(bit_length: int = 1_000_000, num_runs: int = 1):
             if os.path.exists(os.path.dirname(target)):
                 os.makedirs(target, exist_ok=True)
                 shutil.copy(output_path, os.path.join(target, "verified_si28_bits.npy"))
-                print(f"   ↳ Auto-bound to target path: {target}")
+                print(f"   ↳ Bound to target path: {target}")
                 transferred_count += 1
         except Exception:
             pass

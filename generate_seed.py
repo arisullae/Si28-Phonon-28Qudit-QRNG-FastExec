@@ -10,8 +10,8 @@ import numpy as np
 # 동일 디렉토리 내 si28_qrng.py 메인 양자 엔진 모듈 임포트
 try:
     from si28_qrng import CirqPhononQRNGEngine, ExecutionMode
-except ImportError:
-    print("❌ [오류] si28_qrng.py 모듈을 찾을 수 없습니다.")
+except ImportError as e:
+    print(f"❌ [오류] si28_qrng 모듈 임포트 실패 (실제 원인: {e})")
     sys.exit(1)
 
 

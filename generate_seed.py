@@ -28,8 +28,8 @@ def generate_and_save_si28_seed(bit_length: int = 1000000, num_runs: int = 1):
         print(f" ❌ [오류] 양자 엔트로피 생성 실패: {result.get('error')}")
         return
 
-    # 2. 정직한 양자 엔트로피 비트스트림 추출
-    raw_bits = result["entropy_streams"][0]
+    # 2. 정직한 양자 엔트로피 비트스트림 추출 및 1차원 배열 병합 (보완 반영)
+    raw_bits = np.concatenate(result["entropy_streams"])
 
     # 3. 데이터 저장 디렉토리(data/) 확보
     output_dir = "data"

@@ -113,4 +113,4 @@ def generate_and_save_si28_seed(bit_length: int = 1_000_000, num_runs: int = 1):
     print(f"✨ [Complete] Quantum Seed Binding Complete ({transferred_count} target locations updated).\n")
 
 if __name__ == "__main__":
-    generate_and_save_si28_seed(bit_length=1_000_000, num_runs=20)
+    generate_and_save_si28_seed(bit_length=1_000_000, num_runs=100)
